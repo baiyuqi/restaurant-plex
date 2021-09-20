@@ -1,252 +1,216 @@
-// #ifdef APP-NVUE
 const BindingX = uni.requireNativePlugin('bindingx');
 const dom = uni.requireNativePlugin('dom');
 const animation = uni.requireNativePlugin('animation');
 
 export default {
 	data() {
-		return {}
+		return {
+			right: 0,
+			button: [],
+			preventGesture: false
+		}
 	},
 
 	watch: {
 		show(newVal) {
+			if (!this.position || JSON.stringify(this.position) === '{}') return;
 			if (this.autoClose) return
-			if (this.stop) return
-			this.stop = true
+			if (this.isInAnimation) return
 			if (newVal) {
-				this.open(newVal)
+				this.open()
 			} else {
 				this.close()
 			}
 		},
-		leftOptions() {
-			this.getSelectorQuery()
-			this.init()
-		},
-		rightOptions(newVal) {
-			this.init()
-		}
 	},
 	created() {
-		this.swipeaction = this.getSwipeAction()
 		if (this.swipeaction.children !== undefined) {
 			this.swipeaction.children.push(this)
 		}
 	},
 	mounted() {
-		this.box = this.getEl(this.$refs['selector-box--hock'])
-		this.selector = this.getEl(this.$refs['selector-content--hock']);
-		this.leftButton = this.getEl(this.$refs['selector-left-button--hock']);
-		this.rightButton = this.getEl(this.$refs['selector-right-button--hock']);
-		this.init()
+		this.boxSelector = this.getEl(this.$refs['selector-box-hock']);
+		this.selector = this.getEl(this.$refs['selector-content-hock']);
+		this.buttonSelector = this.getEl(this.$refs['selector-button-hock']);
+		this.position = {}
+		this.x = 0
+		setTimeout(() => {
+			this.getSelectorQuery()
+		}, 200)
 	},
-	// beforeDestroy() {
-	// 	this.swipeaction.children.forEach((item, index) => {
-	// 		if (item === this) {
-	// 			this.swipeaction.children.splice(index, 1)
-	// 		}
-	// 	})
-	// },
-	methods: {
-		init() {
-			this.$nextTick(() => {
-				this.x = 0
-				this.button = {
-					show: false
-				}
-				setTimeout(() => {
-					this.getSelectorQuery()
-				}, 200)
+	beforeDestroy() {
+		if (this.timing) {
+			BindingX.unbind({
+				token: this.timing.token,
+				eventType: 'timing'
 			})
-		},
-		onClick(index, item, position) {
+		}
+		if (this.eventpan) {
+			BindingX.unbind({
+				token: this.eventpan.token,
+				eventType: 'pan'
+			})
+		} 
+		this.swipeaction.children.forEach((item, index) => {
+			if (item === this) {
+				this.swipeaction.children.splice(index, 1)
+			}
+		})
+	},
+	methods: {
+		onClick(index, item) {
 			this.$emit('click', {
 				content: item,
-				index,
-				position
+				index
 			})
 		},
 		touchstart(e) {
-			// 每次只触发一次，避免多次监听造成闪烁
+			if (this.isInAnimation) return
 			if (this.stop) return
 			this.stop = true
 			if (this.autoClose) {
 				this.swipeaction.closeOther(this)
 			}
-				
-			const leftWidth = this.button.left.width
-			const rightWidth = this.button.right.width
-			let expression = this.range(this.x, -rightWidth, leftWidth)
-			let leftExpression = this.range(this.x - leftWidth, -leftWidth, 0)
-			let rightExpression = this.range(this.x + rightWidth, 0, rightWidth)
+			let endWidth = this.right
+			let boxStep = `(x+${this.x})`
+			let pageX = `${boxStep}> ${-endWidth} && ${boxStep} < 0?${boxStep}:(x+${this.x} < 0? ${-endWidth}:0)`
 
-			this.eventpan = BindingX.bind({
-				anchor: this.box,
-				eventType: 'pan',
-				props: [{
-					element: this.selector,
+			let props = [{
+				element: this.selector,
+				property: 'transform.translateX',
+				expression: pageX
+			}]
+
+			let left = 0
+			for (let i = 0; i < this.options.length; i++) {
+				let buttonSelectors = this.getEl(this.$refs['button-hock'][i]);
+				if (this.button.length === 0 || !this.button[i] || !this.button[i].width) return
+				let moveMix = endWidth - left
+				left += this.button[i].width
+				let step = `(${this.x}+x)/${endWidth}`
+				let moveX = `(${step}) * ${moveMix}`
+				let pageButtonX = `${moveX}&& (x+${this.x} > ${-endWidth})?${moveX}:${-moveMix}`
+				props.push({
+					element: buttonSelectors,
 					property: 'transform.translateX',
-					expression
-				}, {
-					element: this.leftButton,
-					property: 'transform.translateX',
-					expression: leftExpression
-				}, {
-					element: this.rightButton,
-					property: 'transform.translateX',
-					expression: rightExpression
-				}, ]
-			}, (e) => {
-				// nope
+					expression: pageButtonX
+				})
+			}
+
+			this.eventpan = this._bind(this.boxSelector, props, 'pan', (e) => {
 				if (e.state === 'end') {
 					this.x = e.deltaX + this.x;
-					this.isclick = true
-					this.bindTiming(e.deltaX)
+					if (this.x < -endWidth) {
+						this.x = -endWidth
+					}
+					if (this.x > 0) {
+						this.x = 0
+					}
+					this.stop = false
+					this.bindTiming();
 				}
-			});
+			})
 		},
 		touchend(e) {
-			if (this.isopen !== 'none' && !this.isclick) {
-				this.open('none')
-			}
-		},
-		bindTiming(x) {
-			const left = this.x
-			const leftWidth = this.button.left.width
-			const rightWidth = this.button.right.width
-			const threshold = this.threshold
-			if (!this.isopen || this.isopen === 'none') {
-				if (left > threshold) {
-					this.open('left')
-				} else if (left < -threshold) {
-					this.open('right')
-				} else {
-					this.open('none')
+			this.$nextTick(() => {
+				if (this.isopen && !this.isDrag && !this.isInAnimation) {
+					this.close()
 				}
+			})
+		},
+		bindTiming() {
+			if (this.isopen) {
+				this.move(this.x, -this.right)
 			} else {
-				if ((x > -leftWidth && x < 0) || x > rightWidth) {
-					if ((x > -threshold && x < 0) || (x - rightWidth > threshold)) {
-						this.open('left')
-					} else {
-						this.open('none')
-					}
-				} else {
-					if ((x < threshold && x > 0) || (x + leftWidth < -threshold)) {
-						this.open('right')
-					} else {
-						this.open('none')
-					}
-				}
+				this.move(this.x, -40)
 			}
 		},
-
-		/**
-		 * 移动范围
-		 * @param {Object} num
-		 * @param {Object} mix
-		 * @param {Object} max
-		 */
-		range(num, mix, max) {
-			return `min(max(x+${num}, ${mix}), ${max})`
+		move(left, value) {
+			if (left >= value) {
+				this.close()
+			} else {
+				this.open()
+			}
 		},
-
 		/**
 		 * 开启swipe
 		 */
-		open(type) {
-			this.animation(type)
+		open() {
+			this.animation(true)
 		},
-
 		/**
 		 * 关闭swipe
 		 */
 		close() {
-			this.animation('none')
+			this.animation(false)
 		},
-
 		/**
 		 * 开启关闭动画
 		 * @param {Object} type
 		 */
 		animation(type) {
-			const time = 300
-			const leftWidth = this.button.left.width
-			const rightWidth = this.button.right.width
-			if (this.eventpan && this.eventpan.token) {
-				BindingX.unbind({
-					token: this.eventpan.token,
-					eventType: 'pan'
+			this.isDrag = true
+			let endWidth = this.right
+			let time = 200
+			this.isInAnimation = true;
+
+			let exit = `t>${time}`;
+			let translate_x_expression = `easeOutExpo(t,${this.x},${type?(-endWidth-this.x):(-this.x)},${time})`
+			let props = [{
+				element: this.selector,
+				property: 'transform.translateX',
+				expression: translate_x_expression
+			}]
+
+			let left = 0
+			for (let i = 0; i < this.options.length; i++) {
+				let buttonSelectors = this.getEl(this.$refs['button-hock'][i]);
+				if (this.button.length === 0 || !this.button[i] || !this.button[i].width) return
+				let moveMix = endWidth - left
+				left += this.button[i].width
+				let step = `${this.x}/${endWidth}`
+				let moveX = `(${step}) * ${moveMix}`
+				let pageButtonX = `easeOutExpo(t,${moveX},${type ? -moveMix + '-' + moveX: 0 + '-' + moveX},${time})`
+				props.push({
+					element: buttonSelectors,
+					property: 'transform.translateX',
+					expression: pageButtonX
 				})
 			}
 
-			switch (type) {
-				case 'left':
-					Promise.all([
-						this.move(this.selector, leftWidth),
-						this.move(this.leftButton, 0),
-						this.move(this.rightButton, rightWidth * 2)
-					]).then(() => {
-						this.setEmit(leftWidth, type)
-					})
-					break
-				case 'right':
-					Promise.all([
-						this.move(this.selector, -rightWidth),
-						this.move(this.leftButton, -leftWidth * 2),
-						this.move(this.rightButton, 0)
-					]).then(() => {
-						this.setEmit(-rightWidth, type)
-					})
-					break
-				default:
-					Promise.all([
-						this.move(this.selector, 0),
-						this.move(this.leftButton, -leftWidth),
-						this.move(this.rightButton, rightWidth)
-					]).then(() => {
-						this.setEmit(0, type)
-					})
+			this.timing = BindingX.bind({
+				eventType: 'timing',
+				exitExpression: exit,
+				props: props
+			}, (e) => {
+				if (e.state === 'end' || e.state === 'exit') {
+					this.x = type ? -endWidth : 0
+					this.isInAnimation = false;
 
-			}
-		},
-		setEmit(x, type) {
-			const leftWidth = this.button.left.width
-			const rightWidth = this.button.right.width
-			this.isopen = this.isopen || 'none'
-			this.stop = false
-			this.isclick = false
-			// 只有状态不一致才会返回结果
-			if (this.isopen !== type && this.x !== x) {
-				if (type === 'left' && leftWidth > 0) {
-					this.$emit('change', 'left')
+					this.isopen = this.isopen || false
+					if (this.isopen !== type) {
+						this.$emit('change', type)
+					}
+					this.isopen = type
+					this.isDrag = false
 				}
-				if (type === 'right' && rightWidth > 0) {
-					this.$emit('change', 'right')
-				}
-				if (type === 'none') {
-					this.$emit('change', 'none')
-				}
-			}
-			this.x = x
-			this.isopen = type
+			});
 		},
-		move(ref, value) {
-			return new Promise((resolve, reject) => {
-				animation.transition(ref, {
-					styles: {
-						transform: `translateX(${value})`,
-					},
-					duration: 150, //ms
-					timingFunction: 'linear',
-					needLayout: false,
-					delay: 0 //ms
-				}, function(res) {
-					resolve(res)
-				})
-			})
-
+		/**
+		 * 绑定  BindingX
+		 * @param {Object} anchor
+		 * @param {Object} props
+		 * @param {Object} fn
+		 */
+		_bind(anchor, props, eventType, fn) {
+			return BindingX.bind({
+				anchor,
+				eventType,
+				props
+			}, (e) => {
+				typeof(fn) === 'function' && fn(e)
+			});
 		},
-
 		/**
 		 * 获取ref
 		 * @param {Object} el
@@ -258,43 +222,24 @@ export default {
 		 * 获取节点信息
 		 */
 		getSelectorQuery() {
-			Promise.all([
-				this.getDom('left'),
-				this.getDom('right'),
-			]).then((data) => {
-				let show = 'none'
-				if (this.autoClose) {
-					show = 'none'
-				} else {
-					show = this.show
-				}
-
-				if (show === 'none') {
-					// this.close()
-				} else {
-					this.open(show)
-				}
-
+			dom.getComponentRect(this.$refs['selector-content-hock'], (data) => {
+				if (this.position.content) return
+				this.position.content = data.size
 			})
-
-		},
-		getDom(str) {
-			return new Promise((resolve, reject) => {
-				dom.getComponentRect(this.$refs[`selector-${str}-button--hock`], (data) => {
-					if (data) {
-						this.button[str] = data.size
-						resolve(data)
-					} else {
-						reject()
+			for (let i = 0; i < this.options.length; i++) {
+				dom.getComponentRect(this.$refs['button-hock'][i], (data) => {
+					if (!this.button) {
+						this.button = []
+					}
+					if (this.options.length === this.button.length) return
+					this.button.push(data.size)
+					this.right += data.size.width
+					if (this.autoClose) return
+					if (this.show) {
+						this.open()
 					}
 				})
-			})
+			}
 		}
 	}
 }
-
-// #endif
-
-// #ifndef APP-NVUE
-export default {}
-// #endif
